@@ -1,0 +1,6 @@
+node_modules/
+*.tgz
+.pi/
+.DS_Store
+*.log
+auth.json

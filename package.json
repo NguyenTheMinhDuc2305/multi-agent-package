@@ -1,0 +1,45 @@
+{
+  "name": "pi-multiple-account-package",
+  "version": "0.1.0",
+  "description": "Several logins per provider for Pi, and /switch-account to move the current session to another account whenever you want",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "multi-account",
+    "switch-account",
+    "anthropic",
+    "codex"
+  ],
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "e2e": "node scripts/e2e.mjs"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@types/node": "^22.20.5",
+    "typescript": "^6.0.3"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  }
+}
