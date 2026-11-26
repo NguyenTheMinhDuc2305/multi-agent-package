@@ -20,6 +20,6 @@ export function formatList(views: readonly FamilyView[], current: string | undef
 		}
 		if (view.nextLogin) lines.push(`  add another: /login → "${view.nextLogin}"`);
 	}
-	lines.push("", "Switch: /switch-account [account | number | label | next]");
+	lines.push("", "Switch: /switch-account [account | number | name | email | next]  ·  Name: /label-account  ·  Usage: /usage");
 	return lines.join("\n");
 }

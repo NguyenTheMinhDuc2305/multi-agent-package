@@ -1,13 +1,14 @@
 /**
- * pi-multiple-account-package — several logins per provider, and a manual account switch.
+ * pi-multiple-account-package — several logins per provider, a manual account switch, plan usage.
  *
  * Logins:  /login offers "Anthropic (account 2)", "… (account 3)" … and "OpenAI Codex (account 2)" …
  *          next to Pi's own entries (account 1). Each account is its own provider
  *          (`anthropic-account-2`) with its own token and the family's models.
- * Switch:  /switch-account [account | number | label | next | prev]
+ * Switch:  /switch-account [account | number | name | email | next | prev | list]
  *          moves this session to the same model on another logged-in account of the same provider.
- *          /switch-account list · /switch-account label <account> [text]
- * Config:  <Pi config dir>/multiple-account.json (optional: labels, families)
+ * Usage:   /usage — 5-hour and weekly plan usage of every logged-in account.
+ * Names:   /label-account [<account> <name> [email]] — note who an account is.
+ * Config:  <Pi config dir>/multiple-account.json (optional: account names/emails, families)
  *
  * Nothing switches automatically: there is no failover or rotation in this package.
  */
@@ -17,15 +18,16 @@ import { type ExtensionAPI, type ExtensionContext, getAgentDir, type ModelRegist
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAccountProvider } from "../src/accounts.ts";
-import { readSettings, type Settings, writeSettings } from "../src/config.ts";
+import { type AccountNote, readSettings, type Settings, writeSettings } from "../src/config.ts";
 import { type FamilyView, formatList } from "../src/format.ts";
+import { isEmail, LABEL_USAGE, parseLabelArgs, resolveLabelAccount } from "../src/label.ts";
 import { accountsOf, familyOf, nextFreeAccount, parseAccount } from "../src/slots.ts";
-import { type AccountInfo, accountInfos, describeAccount, resolveTarget } from "../src/switch.ts";
+import { type AccountInfo, accountInfos, describeAccount, noteText, resolveTarget } from "../src/switch.ts";
+import { fetchUsage, formatUsage, type UsageGroup, type UsageReport } from "../src/usage.ts";
 
 type Level = "info" | "warning" | "error";
 
 const LOGIN_POLL_MS = 3000;
-const STATUS_KEY = "multiple-account";
 const PREFIX = "multiple-account";
 
 export default function multipleAccount(pi: ExtensionAPI) {
@@ -48,7 +50,6 @@ export default function multipleAccount(pi: ExtensionAPI) {
 	/** Extra-account providers this extension registered: id → display name. */
 	let registered = new Map<string, string>();
 	let loggedIn = new Set<string>();
-	let statusCtx: ExtensionContext | undefined;
 	let notify: ((message: string, level?: Level) => void) | undefined;
 	let poll: ReturnType<typeof setInterval> | undefined;
 
@@ -83,18 +84,21 @@ export default function multipleAccount(pi: ExtensionAPI) {
 		return out;
 	};
 
-	const info = (id: string): AccountInfo => accountInfos([id], families, settings.labels)[0] ?? { id, family: id, n: 1 };
+	const info = (id: string): AccountInfo => accountInfos([id], families, settings.accounts)[0] ?? { id, family: id, n: 1 };
 
-	/** Accounts to keep registered for `family` (logged in or labelled) plus the next free one. */
+	/** Accounts to keep registered for `family` (logged in or named) plus the next free one. */
 	const familySlots = (family: string) => {
-		const known = accountsOf(family, [...loggedIn, ...Object.keys(settings.labels)], families);
+		const known = accountsOf(family, [...loggedIn, ...Object.keys(settings.accounts)], families);
 		return { known, spare: nextFreeAccount(family, known, families) };
 	};
 
+	/** How an account appears in /login: "Anthropic (account 2 · Work · me@company.com)". */
 	const loginName = (id: string): string => {
 		const parsed = parseAccount(id, families)!;
-		const name = builtins.get(parsed.family)?.name ?? parsed.family;
-		return `${name} (${settings.labels[id] ?? `account ${parsed.n}`})`;
+		const provider = builtins.get(parsed.family)?.name ?? parsed.family;
+		if (parsed.n === 1) return provider; // Pi's own entry
+		const note = noteText(settings.accounts[id] ?? {});
+		return `${provider} (account ${parsed.n}${note ? ` \u00b7 ${note}` : ""})`;
 	};
 
 	// ---- registration --------------------------------------------------------------------------
@@ -118,25 +122,6 @@ export default function multipleAccount(pi: ExtensionAPI) {
 		registered = wanted;
 	};
 
-	/** Footer: which account this session uses, when its provider has several logged in. */
-	const updateStatus = (ctx: ExtensionContext | undefined = statusCtx) => {
-		if (!ctx?.hasUI) return;
-		const provider = ctx.model?.provider;
-		const family = familyOf(provider, families);
-		const siblings = family ? accountsOf(family, loggedIn, families) : [];
-		try {
-			if (!provider || !family || siblings.length < 2) {
-				ctx.ui.setStatus(STATUS_KEY, undefined);
-				return;
-			}
-			const index = siblings.indexOf(provider);
-			const where = index < 0 ? "not logged in" : `${index + 1}/${siblings.length}`;
-			ctx.ui.setStatus(STATUS_KEY, `account: ${describeAccount(info(provider))} (${where})`);
-		} catch {
-			// UI gone (session replaced/shutdown)
-		}
-	};
-
 	/** Re-apply when the set of logged-in accounts changed (Pi has no login event). */
 	const refresh = () => {
 		const before = loggedIn;
@@ -144,17 +129,20 @@ export default function multipleAccount(pi: ExtensionAPI) {
 		if (now.size === before.size && [...now].every((id) => before.has(id))) return;
 		apply();
 		for (const id of loggedIn) {
-			if (!before.has(id)) notify?.(`${PREFIX}: ${describeAccount(info(id))} logged in. Use it with /switch-account ${id}`, "info");
+			if (!before.has(id)) {
+				notify?.(
+					`${PREFIX}: ${describeAccount(info(id))} logged in. Name it with /label-account ${id} <name> [email]; use it with /switch-account ${id}`,
+					"info",
+				);
+			}
 		}
 		for (const id of before) if (!loggedIn.has(id)) notify?.(`${PREFIX}: ${id} logged out`, "warning");
-		updateStatus();
 	};
 
 	apply();
 
 	pi.on("session_start", (_event, ctx) => {
 		registry = ctx.modelRegistry;
-		statusCtx = ctx;
 		notify = (message, level = "info") => {
 			try {
 				ctx.ui.notify(message, level);
@@ -163,7 +151,6 @@ export default function multipleAccount(pi: ExtensionAPI) {
 			}
 		};
 		apply(); // the registry also knows environment-variable logins
-		updateStatus(ctx);
 
 		const warnings: string[] = [];
 		if (settingsError) warnings.push(`${settingsError} (using defaults)`);
@@ -184,10 +171,6 @@ export default function multipleAccount(pi: ExtensionAPI) {
 			poll.unref?.();
 		}
 	});
-	pi.on("model_select", (_event, ctx) => {
-		statusCtx = ctx;
-		updateStatus(ctx);
-	});
 	pi.on("input", () => {
 		refresh();
 		return undefined;
@@ -197,15 +180,19 @@ export default function multipleAccount(pi: ExtensionAPI) {
 		poll = undefined;
 	});
 
-	// ---- /switch-account -----------------------------------------------------------------------
+	// ---- shared helpers ------------------------------------------------------------------------
 
-	/** Show in the TUI, or print when there is no UI (`pi -p "/switch-account …"`). */
+	/** Show in the TUI, or print when there is no UI (`pi -p "/usage"`). */
 	const say = (ctx: ExtensionContext, message: string, level: Level = "info") => {
 		if (ctx.hasUI) ctx.ui.notify(message, level);
 		else (level === "error" ? console.error : console.log)(message);
 	};
 
-	const loggedInOf = (family: string): AccountInfo[] => accountInfos(accountsOf(family, loggedIn, families), families, settings.labels);
+	const loggedInOf = (family: string): AccountInfo[] => accountInfos(accountsOf(family, loggedIn, families), families, settings.accounts);
+
+	/** Logged-in and named accounts of every family, account 1 first. */
+	const knownAccounts = (): AccountInfo[] =>
+		accountInfos([...new Set([...loggedIn, ...Object.keys(settings.accounts)])], families, settings.accounts);
 
 	const listText = (ctx: ExtensionContext): string => {
 		const views: FamilyView[] = families.map((family) => {
@@ -220,22 +207,119 @@ export default function multipleAccount(pi: ExtensionAPI) {
 		return formatList(views, ctx.model?.provider);
 	};
 
-	const setLabel = (argv: string[]): string => {
-		const [id, ...words] = argv;
-		if (!id) return "usage: /switch-account label <account> [text]   (no text clears the label)";
-		if (!parseAccount(id, families)) {
-			throw new Error(`"${id}" is not an account id (e.g. ${families.map((f) => `${f}, ${f}-account-2`).join("; ")})`);
-		}
+	const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+	// ---- names and emails ----------------------------------------------------------------------
+
+	/** Change an account's note; `null` clears a field. Returns the confirmation. */
+	const setNote = (id: string, change: { name?: string | null; email?: string | null }): string => {
 		loadSettings(); // pick up edits made outside this process
 		if (settingsError) throw new Error(`fix ${settingsPath} first: ${settingsError}`);
-		const label = words.join(" ").trim();
-		if (label) settings.labels[id] = label;
-		else delete settings.labels[id];
+		const note: AccountNote = { ...settings.accounts[id] };
+		if (change.name !== undefined) {
+			if (change.name) note.name = change.name;
+			else delete note.name;
+		}
+		if (change.email !== undefined) {
+			if (change.email) note.email = change.email;
+			else delete note.email;
+		}
+		if (note.name || note.email) settings.accounts[id] = note;
+		else delete settings.accounts[id];
 		writeSettings(settingsPath, settings);
-		apply();
-		updateStatus();
-		return label ? `${PREFIX}: ${id} is now labelled "${label}"` : `${PREFIX}: label of ${id} cleared`;
+		apply(); // renames the /login entry
+		const now = noteText(note);
+		return now ? `${PREFIX}: ${id} is now "${now}"` : `${PREFIX}: name and email of ${id} cleared`;
 	};
+
+	/** Interactive /label-account: pick an account, then type its name and email. */
+	const labelInteractively = async (ctx: ExtensionContext): Promise<void> => {
+		const accounts = knownAccounts();
+		if (accounts.length === 0) {
+			say(ctx, `${PREFIX}: no account is logged in yet; log in with /login first`, "warning");
+			return;
+		}
+		const options = accounts.map((a) => describeAccount(a));
+		const choice = await ctx.ui.select("Name which account?", options);
+		if (!choice) return;
+		const account = accounts[options.indexOf(choice)]!;
+		const name = await ctx.ui.input(`Name for ${account.id}  (empty = keep, "-" = clear)`, account.name ?? "e.g. Work");
+		if (name === undefined) return;
+		let email: string | undefined;
+		for (;;) {
+			email = await ctx.ui.input(`Email for ${account.id}  (empty = keep, "-" = clear)`, account.email ?? "e.g. me@company.com");
+			if (email === undefined) return;
+			const typed = email.trim();
+			if (!typed || typed === "-" || isEmail(typed)) break;
+			say(ctx, `${PREFIX}: "${typed}" is not an email address`, "warning");
+		}
+		const field = (typed: string) => (typed.trim() === "-" ? null : typed.trim() || undefined);
+		say(ctx, setNote(account.id, { name: field(name), email: field(email) }));
+	};
+
+	const label = async (ctx: ExtensionContext, argv: string[]): Promise<void> => {
+		if (argv.length === 0) {
+			if (ctx.hasUI) await labelInteractively(ctx);
+			else say(ctx, `${listText(ctx)}\n\nName an account:\n${LABEL_USAGE}`);
+			return;
+		}
+		const parsed = parseLabelArgs(argv);
+		if (parsed.kind === "error") {
+			say(ctx, `${PREFIX}: ${parsed.error}`, "warning");
+			return;
+		}
+		const target = resolveLabelAccount(parsed.account, knownAccounts(), families, familyOf(ctx.model?.provider, families));
+		if (!target.ok) {
+			say(ctx, `${PREFIX}: ${target.error}`, "warning");
+			return;
+		}
+		if (parsed.kind === "show") {
+			const note = noteText(settings.accounts[target.id] ?? {});
+			say(ctx, `${PREFIX}: ${target.id} ${note ? `is "${note}"` : "has no name or email yet"}\n${LABEL_USAGE}`);
+			return;
+		}
+		if (parsed.kind === "clear") {
+			say(ctx, setNote(target.id, { name: null, email: null }));
+			return;
+		}
+		say(ctx, setNote(target.id, { ...(parsed.name ? { name: parsed.name } : {}), ...(parsed.email ? { email: parsed.email } : {}) }));
+	};
+
+	// ---- /usage --------------------------------------------------------------------------------
+
+	const usageOf = async (ctx: ExtensionContext, family: string, account: AccountInfo): Promise<UsageReport> => {
+		let token: string | undefined;
+		let baseUrl: string | undefined;
+		try {
+			// Pi renews an expired token here, as for a normal request.
+			const resolved = await ctx.modelRegistry.getProviderAuth(account.id);
+			token = resolved?.auth.apiKey;
+			baseUrl = resolved?.auth.baseUrl ?? ctx.modelRegistry.getProvider(account.id)?.baseUrl;
+		} catch (error) {
+			return { status: "error", error: `could not renew the login (${errorText(error)})`, relogin: true };
+		}
+		if (!token) return { status: "error", error: "not logged in", relogin: true };
+		return fetchUsage(fetch, { family, token, ...(baseUrl ? { baseUrl } : {}) });
+	};
+
+	const usageText = async (ctx: ExtensionContext): Promise<string> => {
+		const groups: UsageGroup[] = await Promise.all(
+			families.map(async (family) => ({
+				name: builtins.get(family)?.name ?? family,
+				rows: await Promise.all(
+					loggedInOf(family).map(async (account) => ({
+						id: account.id,
+						note: noteText(account),
+						report: await usageOf(ctx, family, account),
+						loginEntry: loginName(account.id),
+					})),
+				),
+			})),
+		);
+		return formatUsage(groups, ctx.model?.provider);
+	};
+
+	// ---- /switch-account -----------------------------------------------------------------------
 
 	const switchTo = async (ctx: ExtensionContext, arg: string): Promise<void> => {
 		const model = ctx.model;
@@ -252,7 +336,7 @@ export default function multipleAccount(pi: ExtensionAPI) {
 		const current = accounts.find((a) => a.id === model.provider) ?? info(model.provider);
 		const providerName = builtins.get(family)?.name ?? family;
 		const nextLogin = familySlots(family).spare;
-		const addHint = nextLogin ? ` Add one with /login → "${loginName(nextLogin)}".` : "";
+		const addHint = nextLogin ? ` Add one with /login \u2192 "${loginName(nextLogin)}".` : "";
 
 		let target: AccountInfo | undefined;
 		if (!arg) {
@@ -302,40 +386,67 @@ export default function multipleAccount(pi: ExtensionAPI) {
 			return;
 		}
 		pi.setThinkingLevel(level);
-		updateStatus(ctx);
-		say(ctx, `${PREFIX}: switched ${describeAccount(current)} → ${describeAccount(target)} · ${model.id}${level !== "off" ? ` · thinking ${level}` : ""}`);
+		say(ctx, `${PREFIX}: switched ${describeAccount(current)} \u2192 ${describeAccount(target)} \u00b7 ${model.id}${level !== "off" ? ` \u00b7 thinking ${level}` : ""}`);
 	};
 
-	const completions = (prefix: string) => {
+	// ---- commands ------------------------------------------------------------------------------
+
+	const complete = (prefix: string, first: string[], next: (done: string[]) => string[]) => {
 		const tokens = prefix.split(/\s+/);
 		const typing = tokens.pop() ?? "";
 		const done = tokens.filter(Boolean);
 		const base = done.length > 0 ? `${done.join(" ")} ` : "";
-		const accountIds = [...loggedIn].sort();
-		let candidates: string[] = [];
-		if (done.length === 0) {
-			candidates = ["list", "next", "prev", "label", ...accountIds, ...Object.values(settings.labels)];
-		} else if (done[0] === "label" && done.length === 1) {
-			candidates = [...new Set([...accountIds, ...Object.keys(settings.labels), ...registered.keys()])].sort();
-		}
+		const candidates = done.length === 0 ? first : next(done);
 		const items = [...new Set(candidates)].filter((c) => c.startsWith(typing)).map((c) => ({ value: base + c, label: c }));
 		return items.length > 0 ? items.slice(0, 60) : null;
 	};
+	const noteWords = () => Object.values(settings.accounts).flatMap((n) => [n.name, n.email].filter((v): v is string => !!v));
+
+	/** Common start of every command: current registry, fresh login list. */
+	const begin = (ctx: ExtensionContext) => {
+		registry = ctx.modelRegistry;
+		refresh();
+	};
 
 	pi.registerCommand("switch-account", {
-		description: "Move this session to another logged-in account: /switch-account [account|number|label|next|prev|list]",
-		getArgumentCompletions: completions,
+		description: "Move this session to another logged-in account: /switch-account [account|number|name|email|next|prev|list]",
+		getArgumentCompletions: (prefix) => complete(prefix, ["list", "next", "prev", ...[...loggedIn].sort(), ...noteWords()], () => []),
 		handler: async (args, ctx) => {
-			registry = ctx.modelRegistry;
-			statusCtx = ctx;
-			refresh();
+			begin(ctx);
 			const argv = args.trim().split(/\s+/).filter(Boolean);
 			try {
 				if (argv[0] === "list") say(ctx, listText(ctx));
-				else if (argv[0] === "label") say(ctx, setLabel(argv.slice(1)));
+				else if (argv[0] === "label") await label(ctx, argv.slice(1)); // 0.1 syntax, kept
 				else await switchTo(ctx, argv.join(" "));
 			} catch (error) {
-				say(ctx, `${PREFIX}: ${error instanceof Error ? error.message : String(error)}`, "error");
+				say(ctx, `${PREFIX}: ${errorText(error)}`, "error");
+			}
+		},
+	});
+
+	pi.registerCommand("label-account", {
+		description: "Note an account's name and email: /label-account [<account> <name> [email] | <account> clear]",
+		getArgumentCompletions: (prefix) =>
+			complete(prefix, [...knownAccounts().map((a) => a.id), ...registered.keys()], (done) => (done.length === 1 ? ["name", "email", "clear"] : [])),
+		handler: async (args, ctx) => {
+			begin(ctx);
+			try {
+				await label(ctx, args.trim().split(/\s+/).filter(Boolean));
+			} catch (error) {
+				say(ctx, `${PREFIX}: ${errorText(error)}`, "error");
+			}
+		},
+	});
+
+	pi.registerCommand("usage", {
+		description: "Plan usage (5-hour and weekly) of every logged-in account",
+		handler: async (_args, ctx) => {
+			begin(ctx);
+			try {
+				if (ctx.hasUI) ctx.ui.notify(`${PREFIX}: checking usage of ${[...loggedIn].length} account(s)\u2026`, "info");
+				say(ctx, await usageText(ctx));
+			} catch (error) {
+				say(ctx, `${PREFIX}: ${errorText(error)}`, "error");
 			}
 		},
 	});

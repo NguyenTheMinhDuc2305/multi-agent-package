@@ -1,4 +1,5 @@
 /** Which account `/switch-account <arg>` means, and how accounts are shown. Pure. */
+import type { AccountNote } from "./config.ts";
 import { accountId, parseAccount } from "./slots.ts";
 
 export interface AccountInfo {
@@ -6,21 +7,30 @@ export interface AccountInfo {
 	family: string;
 	/** Account number: 1 for the family's own provider, 2+ for `<family>-account-N`. */
 	n: number;
-	label?: string;
+	name?: string;
+	email?: string;
 }
 
-export function accountInfos(ids: readonly string[], families: readonly string[], labels: Readonly<Record<string, string>>): AccountInfo[] {
+export function accountInfos(ids: readonly string[], families: readonly string[], notes: Readonly<Record<string, AccountNote>>): AccountInfo[] {
 	const out: AccountInfo[] = [];
 	for (const id of ids) {
 		const parsed = parseAccount(id, families);
-		if (parsed) out.push({ id, family: parsed.family, n: parsed.n, ...(labels[id] ? { label: labels[id] } : {}) });
+		if (!parsed) continue;
+		const note = notes[id] ?? {};
+		out.push({ id, family: parsed.family, n: parsed.n, ...(note.name ? { name: note.name } : {}), ...(note.email ? { email: note.email } : {}) });
 	}
 	return out.sort((a, b) => a.family.localeCompare(b.family) || a.n - b.n);
 }
 
-/** "anthropic-account-2 (work)" */
+/** "Work · me@company.com", "Work", "me@company.com" or "" */
+export function noteText(note: AccountNote | AccountInfo): string {
+	return [note.name, note.email].filter(Boolean).join(" · ");
+}
+
+/** "anthropic-account-2 (Work · me@company.com)" */
 export function describeAccount(account: AccountInfo): string {
-	return account.label ? `${account.id} (${account.label})` : account.id;
+	const note = noteText(account);
+	return note ? `${account.id} (${note})` : account.id;
 }
 
 export type Resolution = { ok: true; account: AccountInfo } | { ok: false; error: string };
@@ -29,7 +39,7 @@ export type Resolution = { ok: true; account: AccountInfo } | { ok: false; error
  * Resolve `arg` among the logged-in accounts of one family.
  *
  * Accepts the account id (`anthropic-account-2`), its number (`2`, `account-2`, `account 2`), its
- * label (case-insensitive), or `next` / `prev` relative to `current`.
+ * name or email (case-insensitive), or `next` / `prev` relative to `current`.
  */
 export function resolveTarget(arg: string, accounts: readonly AccountInfo[], current: string | undefined): Resolution {
 	const text = arg.trim();
@@ -55,9 +65,10 @@ export function resolveTarget(arg: string, accounts: readonly AccountInfo[], cur
 		return match ? { ok: true, account: match } : { ok: false, error: `account ${number} is not logged in. Logged in: ${names()}` };
 	}
 
-	const byLabel = accounts.filter((a) => a.label?.toLowerCase() === text.toLowerCase());
-	if (byLabel.length === 1) return { ok: true, account: byLabel[0]! };
-	if (byLabel.length > 1) return { ok: false, error: `"${text}" labels ${byLabel.map((a) => a.id).join(" and ")}; use the account id` };
+	const lower = text.toLowerCase();
+	const byNote = accounts.filter((a) => a.name?.toLowerCase() === lower || a.email?.toLowerCase() === lower);
+	if (byNote.length === 1) return { ok: true, account: byNote[0]! };
+	if (byNote.length > 1) return { ok: false, error: `"${text}" matches ${byNote.map((a) => a.id).join(" and ")}; use the account id` };
 
 	return { ok: false, error: `no logged-in account "${text}". Logged in: ${names()}` };
 }
