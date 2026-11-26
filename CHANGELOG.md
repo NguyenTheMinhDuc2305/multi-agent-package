@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.1]
+
+- Fixed: a name or email set with `/label-account` in one session did not show up in other open sessions until they restarted. Every session now re-reads `multiple-account.json` when it changes (checked every few seconds, on each prompt and at the start of each command), including the `/login` entry names.
+- e2e: an already-open session (RPC mode) sees a name set by another session.
+
 ## [0.2.0]
 
 - `/usage`: 5-hour and weekly plan usage of every logged-in account (Claude subscription and Codex logins), with reset times, the account in use, "limit reached", API keys marked as per-token, and expired/revoked logins shown with the /login entry that renews them.

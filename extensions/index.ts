@@ -15,7 +15,7 @@
 import type { Provider } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createAccountProvider } from "../src/accounts.ts";
 import { type AccountNote, readSettings, type Settings, writeSettings } from "../src/config.ts";
@@ -38,13 +38,34 @@ export default function multipleAccount(pi: ExtensionAPI) {
 	let settings: Settings;
 	let settingsError: string | undefined;
 	let families: string[] = [];
+	/** "mtime:size" of the settings file when it was last read, to notice edits by other Pi processes. */
+	let settingsStamp: string | undefined;
+	const stampOf = (): string => {
+		try {
+			const s = statSync(settingsPath);
+			return `${s.mtimeMs}:${s.size}`;
+		} catch {
+			return "missing";
+		}
+	};
 	const loadSettings = () => {
+		settingsStamp = stampOf();
 		const loaded = readSettings(settingsPath);
 		settings = loaded.settings;
 		settingsError = loaded.error;
 		families = settings.families.filter((f) => builtins.has(f));
 	};
 	loadSettings();
+	/**
+	 * Re-read the settings when another session (or an editor) changed the file since. Every Pi
+	 * process keeps its own copy, so without this a name set in one session stayed invisible in the
+	 * others until they restarted.
+	 */
+	const syncSettings = (): boolean => {
+		if (stampOf() === settingsStamp) return false;
+		loadSettings();
+		return true;
+	};
 
 	let registry: ModelRegistry | undefined;
 	/** Extra-account providers this extension registered: id → display name. */
@@ -124,10 +145,13 @@ export default function multipleAccount(pi: ExtensionAPI) {
 
 	/** Re-apply when the set of logged-in accounts changed (Pi has no login event). */
 	const refresh = () => {
+		const settingsChanged = syncSettings(); // names/emails set by another session
 		const before = loggedIn;
 		const now = computeLoggedIn();
-		if (now.size === before.size && [...now].every((id) => before.has(id))) return;
-		apply();
+		const loginsChanged = !(now.size === before.size && [...now].every((id) => before.has(id)));
+		if (!loginsChanged && !settingsChanged) return;
+		apply(); // also renames the /login entries
+		if (!loginsChanged) return;
 		for (const id of loggedIn) {
 			if (!before.has(id)) {
 				notify?.(
@@ -227,6 +251,7 @@ export default function multipleAccount(pi: ExtensionAPI) {
 		if (note.name || note.email) settings.accounts[id] = note;
 		else delete settings.accounts[id];
 		writeSettings(settingsPath, settings);
+		settingsStamp = stampOf(); // our own write is not an outside change
 		apply(); // renames the /login entry
 		const now = noteText(note);
 		return now ? `${PREFIX}: ${id} is now "${now}"` : `${PREFIX}: name and email of ${id} cleared`;

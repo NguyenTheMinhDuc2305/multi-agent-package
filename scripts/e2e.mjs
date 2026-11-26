@@ -138,6 +138,37 @@ function pi(...args) {
 	});
 }
 
+
+/** A long-lived Pi (RPC mode), like a second open session; collects what the package shows it. */
+function rpcSession() {
+	const command = ["pi", "-e", PKG, "--mode", "rpc", "--no-session", "--model", `anthropic/${MODEL}`].map(quote).join(" ");
+	const child = spawn(command, { shell: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PI_CODING_AGENT_DIR: dir } });
+	const notes = [];
+	let buf = "";
+	child.stdout.on("data", (d) => {
+		buf += d;
+		let i;
+		while ((i = buf.indexOf("\n")) >= 0) {
+			const line = buf.slice(0, i).replace(/\r$/, "");
+			buf = buf.slice(i + 1);
+			try {
+				const r = JSON.parse(line);
+				if (r.type === "extension_ui_request" && r.method === "notify") notes.push(r.message);
+			} catch {}
+		}
+	});
+	return {
+		/** Send a command and wait for what the package says back. */
+		async ask(message) {
+			const n = notes.length;
+			child.stdin.write(`${JSON.stringify({ type: "prompt", message })}\n`);
+			for (let t = 0; t < 300 && notes.length === n; t++) await new Promise((r) => setTimeout(r, 100));
+			return notes.slice(n).join("\n");
+		},
+		close: () => killTree(child),
+	};
+}
+
 let failures = 0;
 async function scenario(title, args, checks) {
 	const before = seen.length;
@@ -198,7 +229,25 @@ try {
 		["one usage request per account, no chat", usage.length === 4 && chats.length === 0],
 	]);
 
-	await scenario("8. Unknown account", ["-p", "/switch-account 5"], (out, keys) => [
+	{
+		console.log("=== 8. A name set in another session shows up in a session that is already open");
+		const open = rpcSession();
+		const before = await open.ask("/switch-account list");
+		await pi("-p", "/label-account anthropic-account-3 Night night@example.com");
+		const after = await open.ask("/switch-account list");
+		open.close();
+		console.log(after.split("\n").map((l) => `  | ${l}`).join("\n"));
+		for (const [label, ok] of [
+			["unnamed before", /anthropic-account-3\s*$/m.test(before)],
+			["named after, without restarting", after.includes("anthropic-account-3 (Night · night@example.com)")],
+		]) {
+			console.log(`  ${ok ? "PASS" : "FAIL"} ${label}`);
+			if (!ok) failures++;
+		}
+		console.log();
+	}
+
+	await scenario("9. Unknown account", ["-p", "/switch-account 5"], (out, keys) => [
 		["explains it is not logged in", /account 5 is not logged in/.test(out)],
 		["no model request", keys.length === 0],
 	]);
