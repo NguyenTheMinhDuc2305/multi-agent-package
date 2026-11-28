@@ -8,7 +8,7 @@
  * - Reads are cheap: the file is re-parsed only when its mtime/size changed.
  * - Writes are read-modify-write with an atomic replace (temp file + rename), so a reader never
  *   sees a half-written file. Two processes writing at the same instant can lose one update; the
- *   state is advisory, so the worst case is one extra failed request or a less even spread.
+ *   state is advisory: a lost update can affect cooldowns, occupancy display or account affinity.
  * - A missing or corrupt file reads as empty state; it is never a fatal error.
  */
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";

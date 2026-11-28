@@ -12,38 +12,62 @@ function state(opts: { cooling?: Record<string, number>; users?: Record<string, 
 	};
 }
 
-test("next: the chosen account first, then the ones after it in the pool, wrapping around", () => {
-	assert.deepEqual(failoverOrder(POOL, "a2", state(), "next"), ["a2", "a3", "a4", "a1"]);
-	assert.deepEqual(failoverOrder(POOL, "a4", state(), "next"), ["a4", "a1", "a2", "a3"]);
+test("the chosen account first, then pool order, wrapping around", () => {
+	assert.deepEqual(failoverOrder(POOL, "a2", state()), ["a2", "a3", "a4", "a1"]);
+	assert.deepEqual(failoverOrder(POOL, "a4", state()), ["a4", "a1", "a2", "a3"]);
 });
 
-test("next: accounts cooling down go last, soonest first; the chosen one too", () => {
-	assert.deepEqual(failoverOrder(POOL, "a1", state({ cooling: { a2: 50, a1: 90 } }), "next"), ["a3", "a4", "a2", "a1"]);
+test("accounts cooling down go last, soonest first; the chosen one too", () => {
+	assert.deepEqual(failoverOrder(POOL, "a1", state({ cooling: { a2: 50, a1: 90 } })), ["a3", "a4", "a2", "a1"]);
 });
 
-test("accounts that are not logged in are skipped; an account outside the pool is still tried first", () => {
-	assert.deepEqual(failoverOrder(POOL, "a1", state({ out: ["a3"] }), "next"), ["a1", "a2", "a4"]);
-	assert.deepEqual(failoverOrder(POOL, "x9", state(), "next"), ["x9", "a1", "a2", "a3", "a4"]);
+test("accounts not logged in are skipped; an explicitly requested account outside the pool is tried first", () => {
+	assert.deepEqual(failoverOrder(POOL, "a1", state({ out: ["a3"] })), ["a1", "a2", "a4"]);
+	assert.deepEqual(failoverOrder(POOL, "x9", state()), ["x9", "a1", "a2", "a3", "a4"]);
 });
 
-test("spread: after the agent's account, free accounts before used ones", () => {
-	assert.deepEqual(failoverOrder(POOL, "a1", state({ users: { a2: 1, a3: 2 } }), "spread"), ["a1", "a4", "a2", "a3"]);
+test("failover uses pool order, not free or least-used accounts", () => {
+	assert.deepEqual(failoverOrder(POOL, "a1", state({ users: { a2: 10, a3: 2 } })), ["a1", "a2", "a3", "a4"]);
 });
 
-test("an agent keeps its last account while it is free and ready", () => {
+test("an agent keeps its last account even when other sessions use it", () => {
 	assert.deepEqual(chooseAccount(POOL, "a3", state()), { account: "a3", reason: "previous" });
-	assert.deepEqual(chooseAccount(POOL, "a3", state({ users: { a3: 1 } })), { account: "a1", reason: "free" });
-	assert.deepEqual(chooseAccount(POOL, "a3", state({ cooling: { a3: 10 } })), { account: "a1", reason: "free" });
+	assert.deepEqual(chooseAccount(POOL, "a3", state({ users: { a3: 10 } })), { account: "a3", reason: "previous" });
 });
 
-test("agents spread: the first free account by priority, else the least used", () => {
-	assert.deepEqual(chooseAccount(POOL, undefined, state({ users: { a1: 1, a2: 1 } })), { account: "a3", reason: "free" });
-	assert.deepEqual(chooseAccount(POOL, undefined, state({ users: { a1: 2, a2: 1, a3: 1, a4: 3 } })), { account: "a2", reason: "shared" });
+test("new agents use pool priority, even if that account is the busiest", () => {
+	assert.deepEqual(chooseAccount(POOL, undefined, state({ users: { a1: 10, a2: 1 } })), { account: "a1", reason: "priority" });
+	assert.deepEqual(chooseAccount(POOL, undefined, state({ cooling: { a1: 10 }, users: { a2: 20 } })), { account: "a2", reason: "priority" });
 });
 
-test("every account cooling: the one that recovers first", () => {
+test("a cooling previous account moves to the next ready account in pool order", () => {
+	assert.deepEqual(chooseAccount(POOL, "a3", state({ cooling: { a3: 10 } })), { account: "a4", reason: "next" });
+	assert.deepEqual(chooseAccount(POOL, "a4", state({ cooling: { a4: 10, a1: 20 } })), { account: "a2", reason: "next" });
+});
+
+test("a recovered earlier account does not pull an agent back from its new account", () => {
+	const moved = chooseAccount(POOL, "a1", state({ cooling: { a1: 10 } }))!;
+	assert.equal(moved.account, "a2");
+	assert.deepEqual(chooseAccount(POOL, moved.account, state({ users: { a2: 20 } })), { account: "a2", reason: "previous" });
+});
+
+test("previous account removed from the pool or logged out: choose by pool priority", () => {
+	assert.deepEqual(chooseAccount(POOL, "x9", state()), { account: "a1", reason: "priority" });
+	assert.deepEqual(chooseAccount(POOL, "a3", state({ out: ["a3"] })), { account: "a1", reason: "priority" });
+});
+
+test("selection never consults occupancy", () => {
+	const s = state();
+	s.users = () => { throw new Error("load balancing must not run"); };
+	assert.equal(chooseAccount(POOL, "a2", s)?.account, "a2");
+	assert.equal(chooseAccount(POOL, undefined, s)?.account, "a1");
+	assert.deepEqual(failoverOrder(POOL, "a2", s), ["a2", "a3", "a4", "a1"]);
+});
+
+test("every account cooling: the one that recovers first; no logins or no members: no choice", () => {
 	assert.deepEqual(chooseAccount(POOL, undefined, state({ cooling: { a1: 40, a2: 10, a3: 30, a4: 20 } })), { account: "a2", reason: "cooling" });
 	assert.equal(chooseAccount(POOL, undefined, state({ out: ["a1", "a2", "a3", "a4"] })), undefined);
+	assert.equal(chooseAccount([], undefined, state()), undefined);
 });
 
 test("/switch-account next and prev step through the pool, skipping cooling accounts", () => {

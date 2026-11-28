@@ -1,14 +1,12 @@
 /**
  * Which account to use. Pure: cooldowns, leases and logins come in as callbacks.
  *
- *   failoverOrder   accounts to try for one request, the requested one first
- *                   "next":   the session's account, then the ones after it in the pool (by
- *                             priority, wrapping around): what `/switch-account next` would pick
- *                   "spread": the agent's account, then accounts nobody uses, then the least used
+ *   failoverOrder   accounts to try for one request: the session's account, then the ones after
+ *                   it in the pool (by priority, wrapping around), for main sessions AND agents
  *                   Accounts cooling down come last (soonest first), as a last resort: a cooldown
  *                   can be an overestimate and a refused request is cheap.
- *   chooseAccount   the account an agent starts on: its last one if free, else a free one by
- *                   priority, else the least used
+ *   chooseAccount   keep the agent's last usable account; otherwise follow the same failover
+ *                   order. New agents start by pool priority. No load balancing.
  *   stepAccount     `/switch-account next|prev` inside a pool
  */
 import type { PoolMember } from "./pools.ts";
@@ -16,7 +14,7 @@ import type { PoolMember } from "./pools.ts";
 export interface AccountState {
 	/** Until when the account is cooling down for this model, if it is. */
 	coolingUntil(account: string): number | undefined;
-	/** How many other sessions/agents use the account now. */
+	/** Informational only. Account selection deliberately ignores occupancy. */
 	users(account: string): number;
 	/** Logged in (accounts that are not are never picked). */
 	usable(account: string): boolean;
@@ -31,13 +29,9 @@ function after(accounts: readonly string[], current: string | undefined, step: 1
 	return out;
 }
 
-export function failoverOrder(members: readonly PoolMember[], current: string, state: AccountState, mode: "next" | "spread"): string[] {
+export function failoverOrder(members: readonly PoolMember[], current: string, state: AccountState): string[] {
 	const pool = members.map((m) => m.account).filter((a) => state.usable(a) || a === current);
-	let others = after(pool, current);
-	if (mode === "spread") {
-		const rank = new Map(pool.map((a, i) => [a, i]));
-		others = [...others].sort((a, b) => state.users(a) - state.users(b) || rank.get(a)! - rank.get(b)!);
-	}
+	const others = after(pool, current);
 	const ready = others.filter((a) => state.coolingUntil(a) === undefined);
 	const cooling = [current, ...others]
 		.filter((a) => state.coolingUntil(a) !== undefined)
@@ -45,25 +39,22 @@ export function failoverOrder(members: readonly PoolMember[], current: string, s
 	return [...(state.coolingUntil(current) === undefined ? [current] : []), ...ready, ...cooling];
 }
 
-export type ChoiceReason = "previous" | "free" | "shared" | "cooling";
+export type ChoiceReason = "previous" | "priority" | "next" | "cooling";
 
 export function chooseAccount(
 	members: readonly PoolMember[],
 	previous: string | undefined,
 	state: AccountState,
 ): { account: string; reason: ChoiceReason } | undefined {
-	const pool = members.map((m) => m.account).filter((a) => state.usable(a));
+	const pool = members.filter((m) => state.usable(m.account));
 	if (pool.length === 0) return undefined;
-	const ready = pool.filter((a) => state.coolingUntil(a) === undefined);
-	if (previous && ready.includes(previous) && state.users(previous) === 0) return { account: previous, reason: "previous" };
-	const free = ready.find((a) => state.users(a) === 0);
-	if (free) return { account: free, reason: "free" };
-	if (ready.length > 0) {
-		const least = [...ready].sort((a, b) => state.users(a) - state.users(b))[0]!; // stable: priority breaks ties
-		return { account: least, reason: "shared" };
-	}
-	const soonest = [...pool].sort((a, b) => state.coolingUntil(a)! - state.coolingUntil(b)!)[0]!;
-	return { account: soonest, reason: "cooling" };
+	const hasPrevious = previous !== undefined && pool.some((m) => m.account === previous);
+	const start = hasPrevious ? previous! : pool[0]!.account;
+	const account = failoverOrder(pool, start, state)[0]!;
+	const reason: ChoiceReason = state.coolingUntil(account) !== undefined
+		? "cooling"
+		: account === previous ? "previous" : hasPrevious ? "next" : "priority";
+	return { account, reason };
 }
 
 /** The account after (or before) `current` in the pool, skipping cooling ones while others are ready. */

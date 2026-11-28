@@ -1,5 +1,5 @@
 /**
- * pi-multiple-account-package — several logins per provider, account pools that switch to the next
+ * custom-multi-account-package — several logins per provider, account pools that switch to the next
  * account when one runs out, a manual account switch, plan usage.
  *
  * Logins:  /login offers "Anthropic (account 2)", "… (account 3)" … and "OpenAI Codex (account 2)" …
@@ -14,9 +14,9 @@
  * Usage:   /usage — 5-hour and weekly plan usage of every logged-in account.
  * Names:   /label-account [<account> <name> [email]] — note who an account is.
  * Search:  the anthropic_web_search tool, on Anthropic API-key accounts only (pool "anthropic-search").
- * Agents:  other extensions (pi-subagent-package) get an account per agent run through pi.events:
+ * Agents:  other extensions (custom-pi-subagent-package) get an account per agent run through pi.events:
  *          "multiple-account:acquire" / "…:release" / "…:pool-of"; "…:switched" reports a change.
- *          Agents spread over the accounts nobody else is using.
+ *          Agents keep their last account, even when shared; failover follows pool order.
  * Config:  <Pi config dir>/multiple-account.json (names, families, pools — all optional)
  * State:   multiple-account-cooldowns.json, multiple-account-leases.json (shared by every Pi window)
  */
@@ -48,7 +48,7 @@ type StreamMode = "stream" | "streamSimple";
 const LOGIN_POLL_MS = 3000;
 const PREFIX = "multiple-account";
 
-/** pi.events channels shared with other extensions (pi-subagent-package). */
+/** pi.events channels shared with other extensions (custom-pi-subagent-package). */
 export const EVENTS = {
 	acquire: "multiple-account:acquire",
 	release: "multiple-account:release",
@@ -230,8 +230,7 @@ export default function multipleAccount(pi: ExtensionAPI) {
 				sticky = undefined;
 			}
 			const start = sticky?.to ?? requested;
-			const isAgent = sessionId !== undefined && leases.get(sessionId)?.kind === "agent";
-			const order = failoverOrder(pool.members, start, accountState(model.id, sessionId), isAgent ? "spread" : "next");
+			const order = failoverOrder(pool.members, start, accountState(model.id, sessionId));
 
 			const open = async (account: string): Promise<Attempt | undefined> => {
 				const response: Attempt["response"] = {};
@@ -442,7 +441,7 @@ export default function multipleAccount(pi: ExtensionAPI) {
 		mine.clear();
 	});
 
-	// ---- accounts for agents (pi-subagent-package) -----------------------------------------------
+	// ---- accounts for agents (custom-pi-subagent-package) -----------------------------------------------
 
 	const splitRef = (ref: unknown): { provider: string; modelId: string } | undefined => {
 		if (typeof ref !== "string") return undefined;
@@ -511,7 +510,7 @@ export default function multipleAccount(pi: ExtensionAPI) {
 				order: (poolName, model) => {
 					const pool = pools.ok ? pools.value.pools.get(poolName) : undefined;
 					const first = pool?.members[0]?.account;
-					return pool && first ? failoverOrder(pool.members, first, accountState(model), "next") : [];
+					return pool && first ? failoverOrder(pool.members, first, accountState(model)) : [];
 				},
 			}),
 		);

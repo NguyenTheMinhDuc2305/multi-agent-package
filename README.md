@@ -1,4 +1,4 @@
-# pi-multiple-account-package
+# custom-multi-account-package
 
 Several logins per provider for [Pi](https://pi.dev/), with **account pools**: you choose the account, and when it runs out (limit, billing, expired login) the request goes to the next account of the pool by itself and the session stays there. Also **`/switch-account`** to change account yourself, **`/usage`** for the plan usage of every account, **`/label-account`** to note who each account is, and the **`anthropic_web_search`** tool on your Anthropic API keys.
 
@@ -16,14 +16,16 @@ Account naming and the "each account is its own provider" approach follow [pi-mu
 ## Install
 
 ```bash
-pi install git:github.com/NguyenTheMinhDuc2305/multi-account-package@v0.3.0   # from GitHub, pinned
-pi install git:github.com/NguyenTheMinhDuc2305/multi-account-package          # from GitHub, follows main
-pi -e /path/to/this/folder                                                   # one run only
+pi -e /path/to/custom-multi-account-package                           # current local checkout, one run only
+pi install /path/to/custom-multi-account-package                      # current local checkout
+pi install git:github.com/NguyenTheMinhDuc2305/multi-account-package     # remote main, after changes are pushed
 ```
+
+The no-load-balancing policy below is new in **0.3.1**. Older tags (including v0.3.0) still spread agents across accounts. Local changes must be pushed before GitHub installs receive them. Do not load a local and GitHub copy together.
 
 Requires Pi 1.6 (Node ≥ 22.19). Do not install it together with `pi-multi-account` or `pi-account-pools`: they register their own account providers (a warning is shown at startup if one of them is loaded too).
 
-Works with [pi-subagent-package](https://github.com/NguyenTheMinhDuc2305/pi-subagent-package): its agents take accounts from the pools (see [Agents](#agents)).
+Works with [custom-pi-subagent-package](https://github.com/NguyenTheMinhDuc2305/pi-subagent-package): its agents take accounts from the pools (see [Agents](#agents)).
 
 ## Usage
 
@@ -106,13 +108,16 @@ The switch keeps the **same model** and the session's **thinking level**; only t
 
 ### Agents
 
-With [pi-subagent-package](https://github.com/NguyenTheMinhDuc2305/pi-subagent-package), agents follow **pools, not accounts**: an agent's model picks its pool, and each run of the agent takes an account from it:
+With [custom-pi-subagent-package](https://github.com/NguyenTheMinhDuc2305/pi-subagent-package), each agent has its own Pi SDK session (not a new terminal window). Its model selects a pool; account routing behaves like the main session, **without load balancing**:
 
-1. the account it used last time, if nobody else uses it now and it is not cooling down (its prompt cache is there);
-2. else the first account by priority that nobody uses (the main session of any Pi window, or another agent);
-3. else the least used one.
+1. A new agent takes the first ready, logged-in account by pool priority.
+2. Later runs keep its last account while it belongs to the pool, is logged in and is not cooling down — **even if the main session, another agent or another Pi window also uses it**.
+3. On an account-specific failure, try the next account in pool order, wrapping around and placing cooling accounts last, just like the main session. If the previous account was removed or logged out, choose by pool priority again. When all accounts are cooling, try the soonest-recovering one as a last resort.
+4. After A → B, subsequent requests and later agent calls stay on B. A recovering is NOT a reason to switch back. The last account is remembered across normal Pi restarts via the shared state file (not a hard pin that prevents failover).
 
-So agents running side by side get different accounts when there are enough. When an agent's account runs out during its run, it moves to a free account of the pool; the agent's row shows `⇄ anthropic-account-2 → anthropic-account-3 (rate_limit (429))`. `/pool` shows which agent uses which account.
+Several agents may therefore share one account. This avoids account changes just to redistribute work and improves the opportunity for prompt-cache reuse; cache hits are not guaranteed. The row reports automatic changes, e.g. `⇄ anthropic-account-2 → anthropic-account-3 (rate_limit (429))`. `/pool` still shows occupancy, but occupancy does not decide routing.
+
+**Unresolved design — load balancing (logic not yet settled / chưa rõ logic):** how to balance account utilization against per-session cache reuse is not decided. Automatic spreading/free-account/least-used selection has been removed. Do not assume parallel agents get different accounts. Reintroducing balancing requires an explicit policy and tests; it is not part of the current behavior.
 
 Other extensions can do the same through `pi.events` (`multiple-account:acquire`, `…:release`, `…:pool-of`, `…:switched`; see `extensions/index.ts`).
 

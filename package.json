@@ -1,6 +1,6 @@
 {
-  "name": "pi-multiple-account-package",
-  "version": "0.3.0",
+  "name": "custom-multi-account-package",
+  "version": "0.3.1",
   "description": "Several logins per provider for Pi, account pools that move to the next account when one runs out, /switch-account, /usage, /label-account, and anthropic_web_search on API keys",
   "type": "module",
   "license": "MIT",

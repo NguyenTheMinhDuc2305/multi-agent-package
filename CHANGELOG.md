@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1]
+
+- Removed agent load balancing: keep the previous usable account even when shared; new agents select by pool priority. Agent failover now follows the same sequential pool order as the main session, not free/least-used accounts. Recovery of an earlier account does not move a session back.
+- README marks load balancing as unresolved design (logic not yet settled); occupancy remains visible in `/pool` but no longer affects routing.
+- Regression tests cover shared-account affinity, priority, cooldowns, pool changes and recovery without returning to the earlier account.
+- Known issue unchanged: the Pi 1.6 Anthropic E2E reports a fallback ~5-minute cooldown instead of the simulated `Retry-After: 120`; that check still fails.
+
+- Package renamed from `pi-multiple-account-package` to `custom-multi-account-package` (GitHub repository: `multi-account-package`). Commands, `multiple-account.json` and the `pi.events` channels used by custom-pi-subagent-package are unchanged.
+
 ## [0.3.0]
 
 - Account pools. Every model belongs to one pool of accounts; by default one pool per provider with every login (subscriptions first, then API keys), following the logins until you edit it. `/pool` shows the pools, cooldowns and who uses which account; `/pool add|remove|priority|new|models|default|delete|tool|clear` edit them (validated, saved in `multiple-account.json`).

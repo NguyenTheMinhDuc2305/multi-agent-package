@@ -2,14 +2,14 @@
  * Who uses which account right now, across every Pi process on the machine (shared state file).
  *
  * A lease is held per session id: the main session of each Pi window holds the account of its
- * current model; an agent holds the account it was given for the length of its run. Agents use
- * this to spread over the accounts nobody else is using.
+ * current model; an agent holds the account it was given for the length of its run. Occupancy is
+ * displayed by /pool, not used for load balancing.
  *
  * A lease goes away when it is released, when its process is gone, or when its heartbeat is older
  * than LEASE_STALE_MS (a crashed or killed Pi).
  *
  * `last` remembers, per owner (e.g. an agent), the account it used last, so its next run can stay
- * on it while it is free (its prompt cache lives there).
+ * on it even when shared (to improve prompt-cache reuse).
  */
 
 export const LEASE_STALE_MS = 3 * 60_000;
