@@ -216,6 +216,10 @@ Every key is optional; the `/pool` and `/label-account` commands write this file
 - Two Pi windows recording a cooldown at the same instant can lose one of the two writes; the next refused request records it again.
 - Rotating several subscription accounts may break a provider's terms of service; check them yourself.
 
+## Manual testing
+
+See the shared [testing guide](https://github.com/NguyenTheMinhDuc2305/pi-subagent-package/blob/main/TESTING.md) for isolated configuration, manual switching, persistent agent sessions, parallel runs, fake-upstream failover checks, and the separate live BrowserMCP compatibility diagnostic. The multi-account E2E currently has one known cooldown-duration failure (`Retry-After`); other checks pass.
+
 ## Development
 
 ```bash
