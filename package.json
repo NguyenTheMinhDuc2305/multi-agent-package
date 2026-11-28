@@ -1,7 +1,7 @@
 {
   "name": "pi-multiple-account-package",
-  "version": "0.2.1",
-  "description": "Several logins per provider for Pi, /switch-account to move the session to another account, /usage for plan usage, /label-account for names and emails",
+  "version": "0.3.0",
+  "description": "Several logins per provider for Pi, account pools that move to the next account when one runs out, /switch-account, /usage, /label-account, and anthropic_web_search on API keys",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -11,7 +11,10 @@
     "switch-account",
     "anthropic",
     "codex",
-    "usage"
+    "usage",
+    "account-pool",
+    "failover",
+    "web-search"
   ],
   "files": [
     "extensions",
@@ -30,7 +33,8 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.6.0",

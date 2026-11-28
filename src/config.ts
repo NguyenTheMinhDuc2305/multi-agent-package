@@ -6,17 +6,20 @@
  *       "anthropic":           { "name": "Personal", "email": "me@example.com" },
  *       "anthropic-account-2": { "name": "Work",     "email": "me@company.com" }
  *     },
- *     "families": ["anthropic", "openai-codex"]
+ *     "families": ["anthropic", "openai-codex"],
+ *     "pools": { … }, "tools": { … }, "fallbackCooldownMinutes": 5, "maxCooldownMinutes": 60
  *   }
  *
- * `accounts` gives accounts a name and an email, shown in /login, /switch-account and /usage (set them
- * with /label-account). `families` chooses the providers that get extra accounts (default:
- * anthropic, openai-codex). The 0.1 format `"labels": { "<account>": "<text>" }` is still read, as the
- * name. A missing or broken file reads as empty.
+ * `accounts` gives accounts a name and an email, shown in /login, /switch-account, /usage and /pool
+ * (set them with /label-account). `families` chooses the providers that get extra accounts
+ * (default: anthropic, openai-codex). The pool keys are described in pools.ts; they are kept as
+ * written here and validated there. The 0.1 format `"labels": { "<account>": "<text>" }` is still
+ * read, as the name. A missing or broken file reads as empty.
  */
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { POOL_KEYS, type PoolsRaw } from "./pools.ts";
 import { DEFAULT_FAMILIES } from "./slots.ts";
+import { writeFileAtomic } from "./state-file.ts";
+import { readFileSync } from "node:fs";
 
 /** What the user wrote down about an account. */
 export interface AccountNote {
@@ -27,10 +30,12 @@ export interface AccountNote {
 export interface Settings {
 	accounts: Record<string, AccountNote>;
 	families: string[];
+	/** The pool part, as written in the file. */
+	pools: PoolsRaw;
 }
 
 export function emptySettings(): Settings {
-	return { accounts: {}, families: [...DEFAULT_FAMILIES] };
+	return { accounts: {}, families: [...DEFAULT_FAMILIES], pools: {} };
 }
 
 const text = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -71,6 +76,7 @@ export function readSettings(path: string): { settings: Settings; error?: string
 	if (Array.isArray(obj.families) && obj.families.every((f) => typeof f === "string" && f.length > 0)) {
 		settings.families = [...new Set(obj.families as string[])];
 	}
+	for (const k of POOL_KEYS) if (obj[k] !== undefined) settings.pools[k] = obj[k];
 	return { settings };
 }
 
@@ -87,17 +93,6 @@ export function writeSettings(path: string, settings: Settings): void {
 	if (settings.families.length !== defaults.length || settings.families.some((f, i) => f !== defaults[i])) {
 		out.families = settings.families;
 	}
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(out, null, 2)}\n`);
-	try {
-		renameSync(tmp, path);
-	} catch (error) {
-		try {
-			unlinkSync(tmp);
-		} catch {
-			// ignore
-		}
-		throw error;
-	}
+	for (const k of POOL_KEYS) if (settings.pools[k] !== undefined) out[k] = settings.pools[k];
+	writeFileAtomic(path, `${JSON.stringify(out, null, 2)}\n`);
 }

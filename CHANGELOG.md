@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.0]
+
+- Account pools. Every model belongs to one pool of accounts; by default one pool per provider with every login (subscriptions first, then API keys), following the logins until you edit it. `/pool` shows the pools, cooldowns and who uses which account; `/pool add|remove|priority|new|models|default|delete|tool|clear` edit them (validated, saved in `multiple-account.json`).
+- Automatic `switch-account next`: when a request is refused for a limit, billing, an expired or revoked login, or model access (429/402/401/403/404), it is sent again on the next account of the model's pool (cooling accounts skipped) without showing the error, and the session stays on that account. Provider-side errors (5xx, 529) are not switched. When every account is refused, one error lists each account and when it is usable again.
+- Cooldowns and account use are shared by every Pi window and agent on the machine (`multiple-account-cooldowns.json`, `multiple-account-leases.json`).
+- `/switch-account next|prev` follow the model's pool and skip accounts cooling down.
+- Agents (pi-subagent-package): accounts per run from the model's pool through `pi.events` (`multiple-account:acquire|release|pool-of|switched`): the agent's previous account when free, else a free one, else the least used; agents switch accounts the same way.
+- `anthropic_web_search` tool (moved from pi-account-pools): Anthropic web search on the API keys of pool `anthropic-search` only; offered to the model only while that pool has a logged-in account.
+- Warning when pi-account-pools is loaded too.
+
 ## [0.2.1]
 
 - Fixed: a name or email set with `/label-account` in one session did not show up in other open sessions until they restarted. Every session now re-reads `multiple-account.json` when it changes (checked every few seconds, on each prompt and at the start of each command), including the `/login` entry names.

@@ -50,12 +50,16 @@ export function accountModels(id: string, template: Provider): Model<Api>[] {
 	return template.getModels().map((model) => ({ ...model, provider: id }));
 }
 
-export function createAccountProvider(id: string, name: string, template: Provider): Provider {
+/**
+ * `streams` replaces the request step (the package routes requests through the model's pool);
+ * without it, requests go straight to the family's implementation.
+ */
+export function createAccountProvider(id: string, name: string, template: Provider, streams?: ProviderStreams): Provider {
 	const auth: ProviderAuth = {
 		...(template.auth.oauth ? { oauth: cloneOAuth(template.auth.oauth, name) } : {}),
 		...(template.auth.apiKey ? { apiKey: cloneApiKey(template.auth.apiKey, name) } : {}),
 	};
-	const streams: ProviderStreams = {
+	const api: ProviderStreams = streams ?? {
 		stream: (model, context, options) => template.stream(model as never, context, options as never),
 		streamSimple: (model, context, options) => template.streamSimple(model as never, context, options),
 	};
@@ -66,6 +70,6 @@ export function createAccountProvider(id: string, name: string, template: Provid
 		headers: template.headers,
 		auth,
 		models: accountModels(id, template),
-		api: streams,
+		api,
 	});
 }

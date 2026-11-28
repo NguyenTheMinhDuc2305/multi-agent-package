@@ -30,8 +30,8 @@ test("names, emails and families round-trip; defaults and empty notes are not wr
 			accounts: { "anthropic-account-2": { name: "Work", email: "me@company.com" }, anthropic: { name: "Personal" } },
 		});
 		assert.deepEqual(readSettings(path).settings.accounts["anthropic-account-2"], { name: "Work", email: "me@company.com" });
-		writeSettings(path, { accounts: {}, families: ["anthropic"] });
-		assert.deepEqual(readSettings(path).settings, { accounts: {}, families: ["anthropic"] });
+		writeSettings(path, { accounts: {}, families: ["anthropic"], pools: {} });
+		assert.deepEqual(readSettings(path).settings, { accounts: {}, families: ["anthropic"], pools: {} });
 	} finally {
 		rmSync(d, { recursive: true, force: true });
 	}
